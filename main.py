@@ -1,5 +1,14 @@
-import sqlite3
+import sys
 import os
+
+# برای مدیریت ماژول های import شده
+module_path = r'c:\users\parsa\appdata\local\programs\python\python313\lib\site-packages'
+
+# اگر مسیر پوشه از قبل در sys.path نباشد، آن را اضافه کنید
+if module_path not in sys.path:
+    sys.path.append(module_path)
+
+import sqlite3
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
