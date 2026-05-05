@@ -71,8 +71,7 @@ def get_ai_response(model_name, user_message):
 # ------------------------- منوی اصلی -------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🎨 گالری هنرمندان", url="https://your-gallery-link.com")],
-        [InlineKeyboardButton("🌐 سایت اصلی هوش مصنوعی", url="https://your-ai-site.com")],
+        [InlineKeyboardButton("🎨 گالری هنرمندان", url="persiarts.runflare.run")],
         [InlineKeyboardButton("💬 گفت‌وگو با چت‌بات", callback_data="start_chat")],
         [InlineKeyboardButton("📬 پیشنهاد پروژه", callback_data="start_project")],
     ]
