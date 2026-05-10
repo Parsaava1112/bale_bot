@@ -1,2 +1,5 @@
 python-telegram-bot[job-queue] 
 python-dotenv
+spellchecker
+fpdf
+numpy
