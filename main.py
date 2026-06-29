@@ -3,22 +3,46 @@ import os
 import logging
 import importlib
 import sys
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, LabeledPrice
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
-    ConversationHandler, filters, ContextTypes, PreCheckoutQueryHandler
+    ConversationHandler, filters, ContextTypes
 )
 from Ai_engine.english_KAI import init_tutor_db
 init_tutor_db()
 
 # ====== بارگذاری متغیرهای محیطی ======
 load_dotenv()
-BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
+BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
-PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
+
+# ====== لینک‌های قابل تنظیم ======
+WEBSITES = {
+    "AiClass": "https://aiclass.runflare.run",
+    "persiarts": "https://persiarts.runflare.run",
+    "SciFlow": "https://sciflow.runflare.run",
+    "Doctrina": "https://doctrina.runflare.run",
+    "palestra": "https://palestra.runflare.run",
+    "theca": "https://theca.runflare.run",
+}
+
+APPS = {
+    "SciFlow App": "https://aiclass.runflare.run/download/sciflow.apk",
+    "Parsa AI": "https://aiclass.runflare.run/download/pai.apk",
+}
+
+CONTACTS = {
+    "instagram": "https://www.instagram.com/ai_class_studio___01?igsh=MndzMGhuamI4cG45",
+    "linkedin": "https://www.linkedin.com/feed/?trk=404_page&skipRedirect=true",
+    "telegram": "https://t.me/aiclasss",
+    "وب سایت عمومی": "https://aiclass.runflare.run",
+    "github": "https://github.com/Parsaava1112",
+}
 
 # ====== تنظیم لاگ ======
 logging.basicConfig(
@@ -29,7 +53,6 @@ logger = logging.getLogger(__name__)
 # ====== ثابت‌های وضعیت مکالمه ======
 CHAT_CONTACT, CHAT_MODEL, CHAT_CONVERSATION, CHAT_MSG = range(4)
 PROJ_TITLE, PROJ_DESC, PROJ_TIME, PROJ_AMOUNT, PROJ_PHONE = range(4, 9)
-SUB_PLAN, SUB_CUSTOM_AMOUNT = range(9, 11)
 
 # ====== دیتابیس ======
 def init_db():
@@ -79,27 +102,6 @@ def init_db():
         )
     """)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS free_messages (
-            user_id INTEGER PRIMARY KEY,
-            messages_used INTEGER DEFAULT 0
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            phone_number TEXT,
-            plan_name TEXT,
-            message_limit INTEGER,
-            messages_used INTEGER DEFAULT 0,
-            start_date TEXT,
-            expiration_date TEXT,
-            is_active INTEGER DEFAULT 1
-        )
-    """)
-
     conn.commit()
     conn.close()
 
@@ -139,7 +141,6 @@ def get_ai_response(model_key, user_message, conv_id=None):
     try:
         module = AI_MODELS[model_key]["module"]
         if hasattr(module, 'generate_response'):
-            # اگر تابع سه آرگومان بگیرد (مثل مربی)
             import inspect
             sig = inspect.signature(module.generate_response)
             if len(sig.parameters) >= 2:
@@ -151,65 +152,6 @@ def get_ai_response(model_key, user_message, conv_id=None):
     except Exception as e:
         logger.error(f"خطا در generate_response: {e}")
         return "خطایی در تولید پاسخ رخ داد."
-
-# ====== مدیریت دسترسی پیام ======
-def get_user_access(user_id, phone_number):
-    conn = sqlite3.connect("bot_data.db")
-    c = conn.cursor()
-    c.execute("""
-        SELECT id, plan_name, message_limit, messages_used, expiration_date
-        FROM subscriptions
-        WHERE user_id = ? AND is_active = 1
-        ORDER BY id DESC LIMIT 1
-    """, (user_id,))
-    sub = c.fetchone()
-    if sub:
-        sub_id, plan_name, limit, used, exp_date = sub
-        if exp_date:
-            if datetime.now() > datetime.fromisoformat(exp_date):
-                c.execute("UPDATE subscriptions SET is_active = 0 WHERE id = ?", (sub_id,))
-                conn.commit()
-                conn.close()
-                return False, "اشتراک شما منقضی شده است."
-        if limit is not None and used >= limit:
-            conn.close()
-            return False, "تعداد پیام‌های مجاز به پایان رسیده است."
-        conn.close()
-        return True, "active_sub"
-
-    c.execute("SELECT messages_used FROM free_messages WHERE user_id = ?", (user_id,))
-    free = c.fetchone()
-    if free:
-        if free[0] < 25:
-            conn.close()
-            return True, "free"
-        else:
-            conn.close()
-            return False, "۲۵ پیام رایگان شما تمام شده است."
-    else:
-        c.execute("INSERT INTO free_messages (user_id, messages_used) VALUES (?, 0)", (user_id,))
-        conn.commit()
-        conn.close()
-        return True, "free"
-
-def consume_message(user_id, phone_number):
-    conn = sqlite3.connect("bot_data.db")
-    c = conn.cursor()
-    c.execute("""
-        SELECT id, message_limit, messages_used FROM subscriptions
-        WHERE user_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1
-    """, (user_id,))
-    sub = c.fetchone()
-    if sub:
-        sub_id, limit, used = sub
-        if limit is not None:
-            c.execute("UPDATE subscriptions SET messages_used = messages_used + 1 WHERE id = ?", (sub_id,))
-        conn.commit()
-        conn.close()
-        return
-    c.execute("UPDATE free_messages SET messages_used = messages_used + 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
 
 # ====== مدیریت گفتگوها ======
 def get_user_conversations(user_id, model_key, limit=5):
@@ -236,7 +178,7 @@ def create_conversation(user_id, phone_number, model_key, title):
     conn.close()
     return conv_id
 
-# ====== توابع راهنمایی کاربر (بدون خروج از حالت) ======
+# ====== توابع راهنمایی کاربر ======
 async def remind_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📱 لطفاً از دکمهٔ «ارسال شماره تماس» استفاده کنید.")
     return CHAT_CONTACT
@@ -253,24 +195,58 @@ async def remind_text_only(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💬 لطفاً پیام خود را به صورت متن بنویسید.")
     return CHAT_MSG
 
-async def remind_sub_plan_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🛒 لطفاً یکی از پلن‌های اشتراک را با دکمه انتخاب کنید.")
-    return SUB_PLAN
-
-async def remind_custom_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔢 لطفاً فقط یک عدد (تعداد پیام) وارد کنید.")
-    return SUB_CUSTOM_AMOUNT
-
 # ====== منوی اصلی ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🎨 گالری هنرمندان", url="https://persiarts.runflare.run")],
+        [InlineKeyboardButton("🌐 وب سایت های من", callback_data="my_websites")],
+        [InlineKeyboardButton("📱 اپلیکیشن های من", callback_data="my_apps")],
         [InlineKeyboardButton("💬 گفت‌وگو با چت‌بات", callback_data="start_chat")],
         [InlineKeyboardButton("📬 پیشنهاد پروژه", callback_data="start_project")],
-        [InlineKeyboardButton("🛒 خرید اشتراک", callback_data="buy_subscription")],
+        [InlineKeyboardButton("📞 ارتباط با ما", callback_data="contact_us")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("👋 به ربات AiClass خوش آمدید! یکی از گزینه‌ها را انتخاب کنید:", reply_markup=reply_markup)
+
+# ====== زیرمنوها ======
+async def my_websites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = []
+    for name, url in WEBSITES.items():
+        keyboard.append([InlineKeyboardButton(name, url=url)])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")])
+    await query.edit_message_text("🌐 وب‌سایت‌های من:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def my_apps(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = []
+    for name, url in APPS.items():
+        keyboard.append([InlineKeyboardButton(name, url=url)])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")])
+    await query.edit_message_text("📱 اپلیکیشن‌های من:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def contact_us(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = []
+    for name, url in CONTACTS.items():
+        keyboard.append([InlineKeyboardButton(name, url=url)])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")])
+    await query.edit_message_text("📞 ارتباط با ما:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton("🌐 وب سایت های من", callback_data="my_websites")],
+        [InlineKeyboardButton("📱 اپلیکیشن های من", callback_data="my_apps")],
+        [InlineKeyboardButton("💬 گفت‌وگو با چت‌بات", callback_data="start_chat")],
+        [InlineKeyboardButton("📬 پیشنهاد پروژه", callback_data="start_project")],
+        [InlineKeyboardButton("📞 ارتباط با ما", callback_data="contact_us")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("👋 به ربات AiClass خوش آمدید! یکی از گزینه‌ها را انتخاب کنید:", reply_markup=reply_markup)
 
 # ====== بخش چت ======
 async def chat_contact_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,12 +362,6 @@ async def chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conv_id = context.user_data.get("conversation_id")
     user_msg = update.message.text
 
-    can_send, reason = get_user_access(user_id, phone)
-    if not can_send:
-        keyboard = [[InlineKeyboardButton("🛒 خرید اشتراک", callback_data="buy_subscription")]]
-        await update.message.reply_text(f"⛔ {reason}\nبرای ادامه، لطفاً اشتراک تهیه کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return CHAT_MSG
-
     try:
         conn = sqlite3.connect("bot_data.db")
         c = conn.cursor()
@@ -420,11 +390,6 @@ async def chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
     except Exception as e:
         logger.error(f"خطا در ذخیره پاسخ بات: {e}")
-
-    try:
-        consume_message(user_id, phone)
-    except Exception as e:
-        logger.error(f"خطا در consume_message: {e}")
 
     await update.message.reply_text(bot_reply)
     return CHAT_MSG
@@ -506,136 +471,28 @@ async def cancel_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ارسال پروژه لغو شد.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ====== خرید اشتراک (پرداخت رسمی) ======
-async def buy_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("🥈 نقره‌ای - ۱۰۰ پیام (۹۰,۰۰۰ تومان، ۱ ماهه)", callback_data="sub_silver")],
-        [InlineKeyboardButton("🥇 طلایی - ۳۰۰ پیام (۲۰۰,۰۰۰ تومان، ۳ ماهه)", callback_data="sub_gold")],
-        [InlineKeyboardButton("💎 الماسی - بی‌نهایت (۵۰۰,۰۰۰ تومان، ۱ ساله)", callback_data="sub_diamond")],
-        [InlineKeyboardButton("🔢 سفارشی - تعداد پیام دلخواه (هر پیام ۱,۰۰۰ تومان)", callback_data="sub_custom")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_menu_sub")],
-    ]
-    await query.edit_message_text("🛒 یک پلن اشتراک انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return SUB_PLAN
-
-async def sub_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "back_to_menu_sub":
-        await query.edit_message_text("به منوی اصلی بازگشتید. /start")
-        return ConversationHandler.END
-
-    if data == "sub_custom":
-        await query.edit_message_text("🔢 تعداد پیام مورد نظر خود را وارد کنید:")
-        return SUB_CUSTOM_AMOUNT
-
-    plans = {
-        "sub_silver": ("نقره‌ای", 100, 90000, 1),
-        "sub_gold": ("طلایی", 300, 200000, 3),
-        "sub_diamond": ("الماسی", None, 500000, 12),
-    }
-    if data not in plans:
-        await query.edit_message_text("انتخاب نامعتبر.")
-        return SUB_PLAN
-
-    plan_name, limit, price, months = plans[data]
-    context.user_data["sub_plan"] = (plan_name, limit, price, months)
-    await send_invoice_for_plan(update.effective_chat.id, context)
-    await query.edit_message_text("✅ فاکتور پرداخت ارسال شد. لطفاً پرداخت را انجام دهید.")
-    return ConversationHandler.END
-
-async def sub_custom_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.isdigit() or int(text) <= 0:
-        await update.message.reply_text("لطفاً یک عدد معتبر و بزرگتر از صفر وارد کنید:")
-        return SUB_CUSTOM_AMOUNT
-    count = int(text)
-    total_price = count * 1000
-    context.user_data["sub_plan"] = ("سفارشی", count, total_price, "نامحدود")
-    await send_invoice_for_plan(update.effective_chat.id, context)
-    await update.message.reply_text("✅ فاکتور سفارشی ارسال شد. لطفاً پرداخت را انجام دهید.")
-    return ConversationHandler.END
-
-async def send_invoice_for_plan(chat_id, context):
-    plan_name, limit, price, months = context.user_data["sub_plan"]
-    title = f"اشتراک {plan_name}"
-    description = f"پلن {plan_name}: {'بی‌نهایت' if limit is None else limit} پیام، {months} ماهه"
-    payload = f"{plan_name}_{chat_id}_{datetime.now().timestamp()}"
-    prices = [LabeledPrice(title, price * 10)]  # ریال
-    await context.bot.send_invoice(
-        chat_id=chat_id,
-        title=title,
-        description=description,
-        payload=payload,
-        provider_token=PAYMENT_PROVIDER_TOKEN,
-        currency="IRR",
-        prices=prices,
-        need_phone_number=True
-    )
-
-async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.pre_checkout_query
-    await query.answer(ok=True)
-
-async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    payment = update.message.successful_payment
-    phone = update.message.contact.phone_number if update.message.contact else ""
-    payload = payment.invoice_payload
-
-    plan_name = "نامشخص"
-    limit = None
-    months = 0
-    if "نقره‌ای" in payload:
-        plan_name = "نقره‌ای"; limit = 100; months = 1
-    elif "طلایی" in payload:
-        plan_name = "طلایی"; limit = 300; months = 3
-    elif "الماسی" in payload:
-        plan_name = "الماسی"; limit = None; months = 12
-    elif "سفارشی" in payload:
-        plan_name = "سفارشی"
-        total_tomans = payment.total_amount / 10
-        limit = int(total_tomans / 1000)
-        months = "نامحدود"
-
-    now = datetime.now()
-    expiration = (now + timedelta(days=30 * months)).isoformat() if months != "نامحدود" else None
-
-    conn = sqlite3.connect("bot_data.db")
-    c = conn.cursor()
-    c.execute("UPDATE subscriptions SET is_active = 0 WHERE user_id = ?", (user_id,))
-    c.execute("INSERT INTO subscriptions (user_id, phone_number, plan_name, message_limit, messages_used, start_date, expiration_date, is_active) VALUES (?,?,?,?,?,?,?,1)",
-              (user_id, phone, plan_name, limit, 0, now.isoformat(), expiration))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text(
-        f"🎉 پرداخت موفق!\n✅ اشتراک {plan_name} با {'بی‌نهایت' if limit is None else limit} پیام فعال شد.\nاز /start برای گفتگو استفاده کنید."
-    )
-
 # ====== مدیریت خطا ======
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="خطا در پردازش به‌روزرسانی:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text("⚠️ خطایی رخ داد. لطفاً دوباره تلاش کنید یا /start را بزنید.")
 
-# ====== تابع اصلی ======
-def main():
-    init_db()
-
-    app = Application.builder().token(BOT_TOKEN).base_url("https://tapi.bale.ai/bot").build()
+# ====== ساخت اپلیکیشن ======
+def create_app(token, base_url=None):
+    """یک Application با هندلرهای مشترک می‌سازد."""
+    builder = Application.builder().token(token)
+    if base_url:
+        builder = builder.base_url(base_url)
+    app = builder.build()
     app.add_error_handler(error_handler)
 
-    # هندلرهای پرداخت
-    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+    # زیرمنوها
+    app.add_handler(CallbackQueryHandler(my_websites, pattern="^my_websites$"))
+    app.add_handler(CallbackQueryHandler(my_apps, pattern="^my_apps$"))
+    app.add_handler(CallbackQueryHandler(contact_us, pattern="^contact_us$"))
+    app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_to_main$"))
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("buy", lambda u, c: buy_subscription(u, c)))
 
     # مکالمه چت
     chat_conv = ConversationHandler(
@@ -691,25 +548,39 @@ def main():
     )
     app.add_handler(proj_conv)
 
-    # مکالمه خرید اشتراک
-    sub_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(buy_subscription, pattern="^buy_subscription$")],
-        states={
-            SUB_PLAN: [
-                CallbackQueryHandler(sub_plan_selected, pattern="^(sub_|back_to_menu_sub)"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, remind_sub_plan_buttons),
-            ],
-            SUB_CUSTOM_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, sub_custom_amount_received),
-                MessageHandler(~filters.COMMAND, remind_custom_number),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_project)],
-    )
-    app.add_handler(sub_conv)
+    return app
 
-    print("✅ ربات آمادهٔ کار است...")
-    app.run_polling()
+# ====== تابع اصلی ======
+async def main():
+    init_db()
+
+    apps = []
+    if BALE_BOT_TOKEN:
+        logger.info("✅ ربات بله در حال راه‌اندازی...")
+        app_bale = create_app(BALE_BOT_TOKEN, base_url="https://tapi.bale.ai/bot")
+        apps.append(app_bale)
+    if TELEGRAM_BOT_TOKEN:
+        logger.info("✅ ربات تلگرام در حال راه‌اندازی...")
+        app_telegram = create_app(TELEGRAM_BOT_TOKEN)
+        apps.append(app_telegram)
+
+    if not apps:
+        logger.error("❌ هیچ توکنی تنظیم نشده است. لطفاً BALE_BOT_TOKEN یا TELEGRAM_BOT_TOKEN را در .env قرار دهید.")
+        return
+
+    # اجرای همزمان تمام ربات‌ها
+    async with apps[0]:
+        tasks = [app.start() for app in apps]
+        await asyncio.gather(*tasks)
+
+        # شروع polling برای همه
+        poll_tasks = [app.updater.start_polling() for app in apps]
+        await asyncio.gather(*poll_tasks)
+
+        logger.info("🚀 همه ربات‌ها آمادهٔ کار هستند.")
+        # منتظر بمان تا سیگنال توقف دریافت شود
+        stop_event = asyncio.Event()
+        await stop_event.wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
