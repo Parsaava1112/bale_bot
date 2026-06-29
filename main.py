@@ -3,8 +3,6 @@ import os
 import logging
 import importlib
 import sys
-import threading
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
@@ -18,25 +16,27 @@ init_tutor_db()
 
 # ====== بارگذاری متغیرهای محیطی ======
 load_dotenv()
-BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 # ====== لینک‌های قابل تنظیم ======
+# وب‌سایت‌ها (خودت لینک‌ها را جایگزین کن)
 WEBSITES = {
     "AiClass": "https://aiclass.runflare.run",
     "persiarts": "https://persiarts.runflare.run",
     "SciFlow": "https://sciflow.runflare.run",
-    "Doctrina": "https://example.com/Doctrina",
+    "Doctrina": "https://doctrina.runflare.run",
     "palestra": "https://palestra.runflare.run",
     "theca": "https://theca.runflare.run",
 }
 
+# اپلیکیشن‌ها (لینک دانلود را جایگزین کن)
 APPS = {
     "SciFlow App": "https://aiclass.runflare.run/download/sciflow.apk",
     "Parsa AI": "https://aiclass.runflare.run/download/pai.apk",
 }
 
+# راه‌های ارتباطی
 CONTACTS = {
     "instagram": "https://www.instagram.com/ai_class_studio___01?igsh=MndzMGhuamI4cG45",
     "linkedin": "https://www.linkedin.com/feed/?trk=404_page&skipRedirect=true",
@@ -363,6 +363,7 @@ async def chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conv_id = context.user_data.get("conversation_id")
     user_msg = update.message.text
 
+    # ذخیره پیام کاربر
     try:
         conn = sqlite3.connect("bot_data.db")
         c = conn.cursor()
@@ -375,12 +376,14 @@ async def chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ مشکلی در ذخیره پیام پیش آمد. لطفاً دوباره تلاش کنید.")
         return CHAT_MSG
 
+    # دریافت پاسخ از هوش مصنوعی
     try:
         bot_reply = get_ai_response(model_key, user_msg, conv_id=conv_id)
     except Exception as e:
         logger.error(f"خطا در get_ai_response: {e}")
         bot_reply = "❌ خطایی در تولید پاسخ رخ داد."
 
+    # ذخیره پاسخ بات
     try:
         conn = sqlite3.connect("bot_data.db")
         c = conn.cursor()
@@ -478,20 +481,22 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text("⚠️ خطایی رخ داد. لطفاً دوباره تلاش کنید یا /start را بزنید.")
 
-# ====== ساخت اپلیکیشن (یکسان برای هر دو پلتفرم) ======
-def create_app(token, base_url=None):
-    builder = Application.builder().token(token)
-    if base_url:
-        builder = builder.base_url(base_url)
-    app = builder.build()
+# ====== تابع اصلی ======
+def main():
+    init_db()
+
+    app = Application.builder().token(BOT_TOKEN).base_url("https://tapi.bale.ai/bot").build()
     app.add_error_handler(error_handler)
 
+    # هندلرهای زیرمنوهای جدید
     app.add_handler(CallbackQueryHandler(my_websites, pattern="^my_websites$"))
     app.add_handler(CallbackQueryHandler(my_apps, pattern="^my_apps$"))
     app.add_handler(CallbackQueryHandler(contact_us, pattern="^contact_us$"))
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_to_main$"))
+
     app.add_handler(CommandHandler("start", start))
 
+    # مکالمه چت
     chat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(chat_contact_start, pattern="^start_chat$")],
         states={
@@ -516,6 +521,7 @@ def create_app(token, base_url=None):
     )
     app.add_handler(chat_conv)
 
+    # مکالمه پروژه
     proj_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(project_start, pattern="^start_project$")],
         states={
@@ -544,37 +550,8 @@ def create_app(token, base_url=None):
     )
     app.add_handler(proj_conv)
 
-    return app
-
-# ====== اجرای همزمان ربات‌ها با Thread ======
-def run_bot(app, name):
-    logger.info(f"🚀 ربات {name} در حال اجرا...")
+    print("✅ ربات آمادهٔ کار است...")
     app.run_polling()
-
-def main():
-    init_db()
-
-    if not BALE_BOT_TOKEN and not TELEGRAM_BOT_TOKEN:
-        logger.error("❌ هیچ توکنی تنظیم نشده است. لطفاً BALE_BOT_TOKEN یا TELEGRAM_BOT_TOKEN را در .env قرار دهید.")
-        return
-
-    bots = []
-    if BALE_BOT_TOKEN:
-        app_bale = create_app(BALE_BOT_TOKEN, base_url="https://tapi.bale.ai/bot")
-        bots.append((app_bale, "بله"))
-    if TELEGRAM_BOT_TOKEN:
-        app_telegram = create_app(TELEGRAM_BOT_TOKEN)
-        bots.append((app_telegram, "تلگرام"))
-
-    threads = []
-    for app, name in bots:
-        t = threading.Thread(target=run_bot, args=(app, name), daemon=True)
-        threads.append(t)
-        t.start()
-
-    # نگه داشتن برنامه اصلی
-    while True:
-        time.sleep(1)
 
 if __name__ == "__main__":
     main()
