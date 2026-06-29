@@ -3,3 +3,5 @@ python-dotenv
 spellchecker
 fpdf
 numpy
+requests
+beautifulsoup4

@@ -3,7 +3,8 @@ import os
 import logging
 import importlib
 import sys
-import asyncio
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
@@ -26,7 +27,7 @@ WEBSITES = {
     "AiClass": "https://aiclass.runflare.run",
     "persiarts": "https://persiarts.runflare.run",
     "SciFlow": "https://sciflow.runflare.run",
-    "Doctrina": "https://doctrina.runflare.run",
+    "Doctrina": "https://example.com/Doctrina",
     "palestra": "https://palestra.runflare.run",
     "theca": "https://theca.runflare.run",
 }
@@ -477,24 +478,20 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text("⚠️ خطایی رخ داد. لطفاً دوباره تلاش کنید یا /start را بزنید.")
 
-# ====== ساخت اپلیکیشن ======
+# ====== ساخت اپلیکیشن (یکسان برای هر دو پلتفرم) ======
 def create_app(token, base_url=None):
-    """یک Application با هندلرهای مشترک می‌سازد."""
     builder = Application.builder().token(token)
     if base_url:
         builder = builder.base_url(base_url)
     app = builder.build()
     app.add_error_handler(error_handler)
 
-    # زیرمنوها
     app.add_handler(CallbackQueryHandler(my_websites, pattern="^my_websites$"))
     app.add_handler(CallbackQueryHandler(my_apps, pattern="^my_apps$"))
     app.add_handler(CallbackQueryHandler(contact_us, pattern="^contact_us$"))
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_to_main$"))
-
     app.add_handler(CommandHandler("start", start))
 
-    # مکالمه چت
     chat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(chat_contact_start, pattern="^start_chat$")],
         states={
@@ -519,7 +516,6 @@ def create_app(token, base_url=None):
     )
     app.add_handler(chat_conv)
 
-    # مکالمه پروژه
     proj_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(project_start, pattern="^start_project$")],
         states={
@@ -550,37 +546,35 @@ def create_app(token, base_url=None):
 
     return app
 
-# ====== تابع اصلی ======
-async def main():
+# ====== اجرای همزمان ربات‌ها با Thread ======
+def run_bot(app, name):
+    logger.info(f"🚀 ربات {name} در حال اجرا...")
+    app.run_polling()
+
+def main():
     init_db()
 
-    apps = []
-    if BALE_BOT_TOKEN:
-        logger.info("✅ ربات بله در حال راه‌اندازی...")
-        app_bale = create_app(BALE_BOT_TOKEN, base_url="https://tapi.bale.ai/bot")
-        apps.append(app_bale)
-    if TELEGRAM_BOT_TOKEN:
-        logger.info("✅ ربات تلگرام در حال راه‌اندازی...")
-        app_telegram = create_app(TELEGRAM_BOT_TOKEN)
-        apps.append(app_telegram)
-
-    if not apps:
+    if not BALE_BOT_TOKEN and not TELEGRAM_BOT_TOKEN:
         logger.error("❌ هیچ توکنی تنظیم نشده است. لطفاً BALE_BOT_TOKEN یا TELEGRAM_BOT_TOKEN را در .env قرار دهید.")
         return
 
-    # اجرای همزمان تمام ربات‌ها
-    async with apps[0]:
-        tasks = [app.start() for app in apps]
-        await asyncio.gather(*tasks)
+    bots = []
+    if BALE_BOT_TOKEN:
+        app_bale = create_app(BALE_BOT_TOKEN, base_url="https://tapi.bale.ai/bot")
+        bots.append((app_bale, "بله"))
+    if TELEGRAM_BOT_TOKEN:
+        app_telegram = create_app(TELEGRAM_BOT_TOKEN)
+        bots.append((app_telegram, "تلگرام"))
 
-        # شروع polling برای همه
-        poll_tasks = [app.updater.start_polling() for app in apps]
-        await asyncio.gather(*poll_tasks)
+    threads = []
+    for app, name in bots:
+        t = threading.Thread(target=run_bot, args=(app, name), daemon=True)
+        threads.append(t)
+        t.start()
 
-        logger.info("🚀 همه ربات‌ها آمادهٔ کار هستند.")
-        # منتظر بمان تا سیگنال توقف دریافت شود
-        stop_event = asyncio.Event()
-        await stop_event.wait()
+    # نگه داشتن برنامه اصلی
+    while True:
+        time.sleep(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
